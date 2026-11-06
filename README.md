@@ -6,7 +6,7 @@
 <p align="center"><em>De la ruta al reporte, en un toque.</em></p>
 
 <p align="center">
-  <img alt="CI" src="https://github.com/JackZL201/rutario/actions/workflows/ci.yml/badge.svg" />
+  <img alt="CI" src="https://github.com/enriqueleondev/rutario/actions/workflows/ci.yml/badge.svg" />
   <img alt="Java" src="https://img.shields.io/badge/Java-Spring_Boot-6DB33F?logo=springboot&logoColor=white" />
   <img alt="React" src="https://img.shields.io/badge/React-TypeScript-61DAFB?logo=react&logoColor=black" />
   <img alt="Kotlin" src="https://img.shields.io/badge/Android-Kotlin_·_Compose-7F52FF?logo=kotlin&logoColor=white" />
@@ -22,7 +22,7 @@ Excel y Word.
 Nació como mi proyecto de **servicio social** (jun–nov 2026) en un bachillerato tecnológico del Estado de México
 y **está en producción**, diseñado para unos 400 alumnos en prácticas.
 
-### 👉 [Probar la demo en vivo](https://jackzl201.github.io/rutario/)
+### 👉 [Probar la demo en vivo](https://enriqueleondev.github.io/rutario/)
 
 La demo es la webapp completa con datos ficticios que viven solo en tu navegador. Entra con cualquiera de
 los botones "Entrar como" y recorre los seis roles.
@@ -88,8 +88,8 @@ Escríbeme a leonenriquer201@gmail.com.
 
 ## Autor
 
-**Enrique Rentería León** (JackZL201) — Ingeniería en Software, UAEM.
-[GitHub](https://github.com/JackZL201) · [LinkedIn](https://www.linkedin.com/in/enrique-renteria-le%C3%B3n-71ba393b5)
+**Enrique Rentería León** (enriqueleondev) — Ingeniería en Software, UAEM.
+[GitHub](https://github.com/enriqueleondev) · [LinkedIn](https://www.linkedin.com/in/enrique-renteria-le%C3%B3n-71ba393b5)
 
 ## Licencia
 

@@ -21,7 +21,7 @@ export const DESARROLLADOR = {
   nombre: 'Enrique Rentería León',
   titulo: 'Ingeniero en Software',
   linkedin: 'https://www.linkedin.com/in/enrique-renteria-le%C3%B3n-71ba393b5',
-  github: 'https://github.com/JackZL201',
+  github: 'https://github.com/enriqueleondev',
 }
 
 /** Debe coincidir con Legal.AVISO_VERSION del backend */
