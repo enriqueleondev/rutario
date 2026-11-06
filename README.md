@@ -22,7 +22,7 @@ Excel y Word.
 Nació como mi proyecto de **servicio social** (jun–nov 2026) en un bachillerato tecnológico del Estado de México
 y **está en producción**, diseñado para unos 400 alumnos en prácticas.
 
-### 👉 [Probar la demo en vivo](https://demo.enriquerenteria.io)
+### 👉 [Probar la demo en vivo](https://jackzl201.github.io/rutario/)
 
 La demo es la webapp completa con datos ficticios que viven solo en tu navegador. Entra con cualquiera de
 los botones "Entrar como" y recorre los seis roles.
