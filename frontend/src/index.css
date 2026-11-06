@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-surface text-on-surface font-sans antialiased; }
+  h1, h2, h3 { @apply font-display; letter-spacing: -0.015em; }
+  /* Foco visible y con contraste suficiente para quien navega con teclado (WCAG 2.4.7 / 1.4.11) */
+  :focus-visible { outline: 2px solid #0A5C54; outline-offset: 2px; }
+  /* Sobre fondo navy el foco se ve en aqua */
+  .on-dark :focus-visible { outline-color: #2EE6C5; }
+}
+
+@layer components {
+  .card { @apply bg-white border border-line rounded-2xl shadow-card; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 h-10 text-sm font-semibold transition-colors disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap; }
+  .btn-primary { @apply btn bg-secondary text-white hover:bg-primary; }
+  .btn-soft { @apply btn bg-primary-container text-secondary hover:bg-[#B5E3DA]; }
+  .btn-outline { @apply btn border border-line bg-white text-on-surface hover:border-primary-container hover:text-secondary; }
+  .btn-ghost { @apply btn text-neutral hover:text-secondary hover:bg-surface-low; }
+  .btn-danger { @apply btn bg-error text-white hover:bg-[#93000a]; }
+  .icon-btn { @apply inline-flex items-center justify-center w-9 h-9 rounded-lg text-neutral hover:bg-surface-low hover:text-secondary transition-colors; }
+  .on-dark .icon-btn { @apply text-white/80 hover:bg-white/10 hover:text-white; }
+  .label { @apply block text-sm font-medium text-neutral mb-1.5; }
+  .input { @apply w-full h-10 rounded-lg border border-[#7c879b] bg-white px-3 text-sm text-on-surface placeholder:text-slate-500 outline-none transition focus:border-secondary focus:ring-2 focus:ring-secondary/25; }
+  textarea.input { @apply h-auto py-2; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap; }
+  .th { @apply px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-secondary whitespace-nowrap; }
+  .td { @apply px-4 py-3 text-sm align-middle; }
+  .tr { @apply border-t border-line hover:bg-primary-container/10 transition-colors; }
+  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-wider text-neutral; }
+  /* Línea punteada de ruta (motivo del logo) */
+  .ruta-divider { height: 4px; background-image: radial-gradient(circle, #FF6B3D 1.6px, transparent 2px); background-size: 11px 4px; background-repeat: repeat-x; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+}
+
+/* Leaflet: evita que el mapa quede encima de drawers/modales */
+.leaflet-container { font-family: Inter, sans-serif; z-index: 0; }
+.leaflet-pane, .leaflet-top, .leaflet-bottom { z-index: 1 !important; }
+.pin-icon { background: none; border: none; }
+
+@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes draw-line { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes ring-fill { from { stroke-dashoffset: var(--ring-from, 176); } to { stroke-dashoffset: var(--ring-to, 0); } }
+@keyframes ping-soft { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes pop-in { 0% { transform: scale(.5); opacity: 0; } 70% { transform: scale(1.1); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes check-draw { from { stroke-dashoffset: 30; } to { stroke-dashoffset: 0; } }
+@keyframes expand-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.animate-slide-in { animation: slide-in .22s ease-out; }
+.animate-fade-in { animation: fade-in .15s ease-out; }
+/* Entradas escalonadas: cada elemento define su retraso con style={{ '--d': '120ms' }} */
+.anim-rise { animation: rise .6s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0ms); }
+.anim-grow { transform-origin: bottom; animation: grow-y .8s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0ms); }
+.anim-draw { stroke-dasharray: 1; animation: draw-line 2.2s ease-out .3s both; }
+.anim-ring { animation: ring-fill 1.4s cubic-bezier(.2,.7,.2,1) .3s both; }
+.anim-ping { animation: ping-soft 1.8s ease-out infinite; }
+.anim-bob { animation: bob 2.4s ease-in-out infinite; }
+.anim-pop { animation: pop-in .45s cubic-bezier(.2,.7,.2,1) both; }
+.anim-check { stroke-dasharray: 30; animation: check-draw .6s ease-out .25s both; }
+.anim-expand { animation: expand-in .25s ease both; }
+/* Tarjeta que se eleva al pasar el cursor */
+.lift { transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.lift:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(11,22,48,.14); }
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-in, .animate-fade-in, .animate-spin, .anim-rise, .anim-grow, .anim-draw, .anim-ring, .anim-ping, .anim-bob, .anim-pop, .anim-check, .anim-expand { animation: none; }
+  .anim-draw, .anim-check { stroke-dashoffset: 0; }
+  .lift { transition: none; }
+  .lift:hover { transform: none; }
+}

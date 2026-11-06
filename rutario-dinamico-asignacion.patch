@@ -1,0 +1,838 @@
+diff --git a/frontend/src/anim.ts b/frontend/src/anim.ts
+new file mode 100644
+index 0000000..64d193c
+--- /dev/null
++++ b/frontend/src/anim.ts
+@@ -0,0 +1,27 @@
++import { useEffect, useRef, useState } from 'react'
++
++export const reducirMovimiento = () =>
++  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
++
++/** Número que «cuenta» desde 0 (o desde el valor anterior) hasta `meta`. Sin animación si el usuario pidió reducir movimiento. */
++export function useCountUp(meta: number, ms = 1200) {
++  const [v, setV] = useState(() => (reducirMovimiento() ? meta : 0))
++  const desde = useRef(v)
++  useEffect(() => {
++    if (reducirMovimiento()) { setV(meta); return }
++    const t0 = performance.now()
++    const ini = desde.current
++    let raf = 0
++    const paso = (now: number) => {
++      const t = Math.min(1, (now - t0) / ms)
++      const e = 1 - Math.pow(1 - t, 3)
++      const val = ini + (meta - ini) * e
++      desde.current = val
++      setV(val)
++      if (t < 1) raf = requestAnimationFrame(paso)
++    }
++    raf = requestAnimationFrame(paso)
++    return () => cancelAnimationFrame(raf)
++  }, [meta, ms])
++  return Math.round(v)
++}
+diff --git a/frontend/src/components/AsignarAlumnosDrawer.tsx b/frontend/src/components/AsignarAlumnosDrawer.tsx
+new file mode 100644
+index 0000000..63e687c
+--- /dev/null
++++ b/frontend/src/components/AsignarAlumnosDrawer.tsx
+@@ -0,0 +1,150 @@
++import { useEffect, useMemo, useState, type CSSProperties } from 'react'
++import { Check, Link2 } from 'lucide-react'
++import { api } from '../api'
++import { Drawer, ErrorBox, useToast } from './ui'
++import type { Usuario, Vinculacion } from '../types'
++import { cls, nombreCompleto } from '../utils'
++
++interface Props {
++  empleador: Usuario | null
++  empresaNombre?: string
++  alumnos: Usuario[]
++  vinculaciones: Vinculacion[]
++  empleadores: Usuario[]
++  onClose: () => void
++  onSaved: () => void
++}
++
++/** Paso a paso: Empresa → Empleador → Alumnos. Aquí se eligen los alumnos que validará esta persona. */
++export default function AsignarAlumnosDrawer({ empleador, empresaNombre, alumnos, vinculaciones, empleadores, onClose, onSaved }: Props) {
++  const toast = useToast()
++  const [sel, setSel] = useState<Set<number>>(new Set())
++  const [guardando, setGuardando] = useState(false)
++  const [error, setError] = useState<string>()
++  const [listo, setListo] = useState<{ agregados: number; quitados: number } | null>(null)
++
++  // Alumnos vinculados a la empresa de este empleador (solo ellos pueden asignarse)
++  const filas = useMemo(() => {
++    if (!empleador) return []
++    return vinculaciones
++      .filter((v) => v.empresaId === empleador.empresaId)
++      .map((v) => ({ v, a: alumnos.find((x) => x.id === v.usuarioId) }))
++      .filter((f): f is { v: Vinculacion; a: Usuario } => !!f.a && f.a.activo)
++      .sort((x, y) => Number(!!x.v.empleadorId) - Number(!!y.v.empleadorId) || nombreCompleto(x.a).localeCompare(nombreCompleto(y.a)))
++  }, [empleador, vinculaciones, alumnos])
++
++  const yaAsignados = useMemo(() => new Set(filas.filter((f) => f.v.empleadorId === empleador?.id).map((f) => f.a.id)), [filas, empleador])
++
++  useEffect(() => {
++    setSel(new Set(yaAsignados))
++    setError(undefined)
++    setListo(null)
++  }, [empleador?.id]) // eslint-disable-line react-hooks/exhaustive-deps
++
++  const agregar = filas.filter((f) => sel.has(f.a.id) && !yaAsignados.has(f.a.id))
++  const quitar = filas.filter((f) => !sel.has(f.a.id) && yaAsignados.has(f.a.id))
++  const hayCambios = agregar.length + quitar.length > 0
++  const alternar = (id: number) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
++
++  const guardar = async () => {
++    if (!empleador) return
++    setError(undefined)
++    setGuardando(true)
++    const cambios = [
++      ...agregar.map((f) => api.guardarVinculacion({ ...f.v, empleadorId: empleador.id })),
++      ...quitar.map((f) => api.guardarVinculacion({ ...f.v, empleadorId: undefined })),
++    ]
++    const res = await Promise.allSettled(cambios)
++    setGuardando(false)
++    const fallos = res.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
++    onSaved()
++    if (fallos.length) {
++      setError(`${fallos.length} de ${res.length} cambios no se pudieron guardar: ${(fallos[0].reason as Error).message}`)
++      return
++    }
++    setListo({ agregados: agregar.length, quitados: quitar.length })
++    toast('Asignación guardada')
++  }
++
++  const pasos = [
++    { n: 1, titulo: 'Empresa', detalle: empresaNombre ?? '—', hecho: true },
++    { n: 2, titulo: 'Empleador', detalle: empleador ? nombreCompleto(empleador) : '—', hecho: true },
++    { n: 3, titulo: 'Alumnos', detalle: hayCambios ? 'Cambios sin guardar' : 'Elige quién', hecho: !!listo },
++  ]
++
++  const boton = quitar.length === 0
++    ? `Asignar ${agregar.length || ''} ${agregar.length === 1 ? 'alumno' : 'alumnos'}`.replace('  ', ' ')
++    : 'Guardar cambios'
++
++  return (
++    <Drawer open={!!empleador} onClose={onClose} title="Asignar alumnos" subtitle={empleador ? `a ${nombreCompleto(empleador)} · ${empresaNombre ?? ''}` : undefined}
++      icon={<Link2 className="w-5 h-5" />}
++      footer={listo ? undefined : <>
++        <span className="mr-auto text-sm font-medium text-neutral" aria-live="polite">{sel.size === 0 ? 'Marca a quién quieres asignar' : `${sel.size} ${sel.size === 1 ? 'alumno seleccionado' : 'alumnos seleccionados'}`}</span>
++        <button className="btn-ghost" onClick={onClose}>Cancelar</button>
++        <button className="btn-primary" disabled={!hayCambios || guardando} onClick={guardar}>{guardando ? 'Guardando…' : boton}</button>
++      </>}>
++      {listo ? (
++        <div className="flex flex-col items-center text-center gap-4 py-12">
++          <div className="w-24 h-24 rounded-full bg-primary-container flex items-center justify-center anim-pop">
++            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#0B7468" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" className="anim-check" /></svg>
++          </div>
++          <h3 className="text-xl font-extrabold">
++            {listo.agregados > 0 && `${listo.agregados} ${listo.agregados === 1 ? 'alumno asignado' : 'alumnos asignados'}`}
++            {listo.agregados > 0 && listo.quitados > 0 && ' · '}
++            {listo.quitados > 0 && `${listo.quitados} ${listo.quitados === 1 ? 'quitado' : 'quitados'}`}
++          </h3>
++          <p className="text-sm text-neutral max-w-xs">{empleador ? nombreCompleto(empleador) : 'El empleador'} verá a sus alumnos en su lista y podrá validar su asistencia cuando registren su entrada.</p>
++          <button className="btn-primary mt-2" onClick={onClose}>Listo</button>
++        </div>
++      ) : (
++        <div className="space-y-5">
++          <ol className="flex items-start" aria-label="Pasos">
++            {pasos.map((p) => (
++              <li key={p.n} className="flex-1 flex flex-col items-center gap-1.5 text-center min-w-0 px-1">
++                <span className={cls('relative w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold', p.n === 3 ? 'bg-ink text-white' : 'bg-secondary text-white')}>
++                  {p.n === 3 && <span className="absolute inset-0 rounded-full bg-coral anim-ping -z-10" aria-hidden="true" />}
++                  {p.n === 3 ? 3 : <Check className="w-4 h-4" strokeWidth={3} />}
++                </span>
++                <span className={cls('text-xs font-semibold', p.n === 3 ? 'text-on-surface' : 'text-secondary')}>{p.titulo}</span>
++                <span className="text-[11px] text-neutral truncate max-w-full">{p.detalle}</span>
++              </li>
++            ))}
++          </ol>
++
++          <p className="rounded-lg bg-surface-low px-3 py-2.5 text-sm text-on-surface-variant">
++            Solo aparecen los alumnos vinculados a <b>{empresaNombre}</b>. Si falta alguien, primero vincúlalo a la empresa desde «Mis alumnos».
++          </p>
++
++          {filas.length === 0 ? (
++            <p className="text-center text-sm text-neutral py-8">Todavía no hay alumnos vinculados a esta empresa.</p>
++          ) : (
++            <ul className="space-y-2">
++              {filas.map(({ v, a }, i) => {
++                const marcado = sel.has(a.id)
++                const otro = v.empleadorId && v.empleadorId !== empleador?.id ? empleadores.find((e) => e.id === v.empleadorId) : undefined
++                const chip = v.empleadorId === empleador?.id
++                  ? { t: 'Asignado a este empleador', c: 'bg-primary-container text-secondary' }
++                  : otro ? { t: `Con ${nombreCompleto(otro)}`, c: 'bg-surface-container text-on-surface-variant' }
++                    : { t: 'Sin empleador', c: 'bg-tertiary-container text-tertiary' }
++                return (
++                  <li key={a.id} className="anim-rise" style={{ '--d': `${i * 40}ms` } as CSSProperties}>
++                    <label className={cls('flex items-center gap-3 rounded-xl border p-3 cursor-pointer transition-colors', marcado ? 'border-brand bg-primary-container/25' : 'border-line hover:bg-surface')}>
++                      <input type="checkbox" className="w-5 h-5 accent-[#0B7468] shrink-0" checked={marcado} onChange={() => alternar(a.id)} />
++                      <span className="flex-1 min-w-0">
++                        <span className="block font-semibold text-sm truncate">{nombreCompleto(a)}</span>
++                        <span className="block text-xs text-neutral">{a.grado ? `${a.grado}° · Grupo ${a.grupo ?? ''}` : a.matricula}</span>
++                      </span>
++                      <span className={cls('chip shrink-0', chip.c)}>{chip.t}</span>
++                    </label>
++                  </li>
++                )
++              })}
++            </ul>
++          )}
++          <ErrorBox msg={error} />
++        </div>
++      )}
++    </Drawer>
++  )
++}
+diff --git a/frontend/src/components/Marca.tsx b/frontend/src/components/Marca.tsx
+index 1f37733..ebf6132 100644
+--- a/frontend/src/components/Marca.tsx
++++ b/frontend/src/components/Marca.tsx
+@@ -23,3 +23,31 @@ export function RutaDecor({ className = '' }: { className?: string }) {
+     </svg>
+   )
+ }
++
++/** Ruta que se dibuja sola con un pin que flota: encabezado del panel principal. */
++export function RutaAnimada({ className = '' }: { className?: string }) {
++  const d = 'M10 110 C 90 110, 90 40, 170 50 S 270 122, 340 82 S 440 22, 500 44'
++  return (
++    <svg viewBox="0 0 520 140" className={className} aria-hidden="true">
++      <path d={d} fill="none" stroke="rgba(255,255,255,.14)" strokeWidth="3" strokeLinecap="round" />
++      <path d={d} pathLength={1} fill="none" stroke="#2EE6C5" strokeWidth="3" strokeLinecap="round" className="anim-draw" />
++      <circle cx="10" cy="110" r="6" fill="#2EE6C5" />
++      <circle cx="170" cy="50" r="5" fill="#FF6B3D" />
++      <circle cx="340" cy="82" r="5" fill="#2EE6C5" />
++      <g className="anim-bob">
++        <path d="M500 30c0 12-12 20-12 20s-12-8-12-20a12 12 0 0 1 24 0Z" fill="#FF6B3D" />
++        <circle cx="488" cy="30" r="4.5" fill="#0B1630" />
++      </g>
++    </svg>
++  )
++}
++
++/** Punto verde que late: indica algo «en vivo». */
++export function PuntoVivo({ className = '' }: { className?: string }) {
++  return (
++    <span className={`relative inline-block w-2.5 h-2.5 ${className}`} aria-hidden="true">
++      <span className="absolute inset-0 rounded-full bg-brand anim-ping" />
++      <span className="absolute inset-0 rounded-full bg-brand" />
++    </span>
++  )
++}
+diff --git a/frontend/src/components/ui.tsx b/frontend/src/components/ui.tsx
+index 43ef2fa..29e7419 100644
+--- a/frontend/src/components/ui.tsx
++++ b/frontend/src/components/ui.tsx
+@@ -1,8 +1,9 @@
+-import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
++import { Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode, type RefObject } from 'react'
+ import { AlertCircle, CheckCircle2, Loader2, X, Car, Laptop, FlaskConical, BookOpen, Trash2 } from 'lucide-react'
+ import type { Carrera, Rol, TipoPractica, Usuario } from '../types'
+ import { ROL_LABEL, TIPO_LABEL } from '../types'
+ import { cls, iniciales } from '../utils'
++import { useCountUp } from '../anim'
+ 
+ /* ---------- Chips ---------- */
+ const ROL_STYLE: Record<Rol, string> = {
+@@ -72,21 +73,25 @@ export function PageHeader({ title, subtitle, eyebrow, actions }: { title: strin
+   )
+ }
+ 
+-export function StatCard({ label, value, icon, hint, tone = 'green' }: { label: string; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: 'green' | 'sky' | 'amber' | 'slate' }) {
++/** Número que cuenta hasta su valor al aparecer (respeta «reducir movimiento»). */
++export function CountUp({ n, ms }: { n: number; ms?: number }) {
++  return <>{useCountUp(n, ms).toLocaleString('es-MX')}</>
++}
++
++export function StatCard({ label, value, icon, hint, tone = 'green', delay = 0 }: { label: ReactNode; value: ReactNode; icon: ReactNode; hint?: ReactNode; tone?: 'green' | 'sky' | 'amber' | 'slate'; delay?: number }) {
+   // Borde izquierdo de color + ícono sin caja: se aleja del look de «tarjeta con ícono pastel»
+   const t = { green: 'border-l-brand text-brand', sky: 'border-l-ink text-ink', amber: 'border-l-coral text-tertiary', slate: 'border-l-neutral text-neutral' }[tone]
+   return (
+-    <div className={cls('card p-5 border-l-[3px]', t.split(' ')[0])}>
++    <div className={cls('card p-5 border-l-[3px] lift anim-rise', t.split(' ')[0])} style={{ '--d': `${delay}ms` } as CSSProperties}>
+       <div className="flex items-center justify-between gap-3">
+         <p className="eyebrow">{label}</p>
+         <span className={cls('shrink-0', t.split(' ')[1])} aria-hidden="true">{icon}</span>
+       </div>
+-      <p className="font-display text-3xl font-extrabold leading-tight mt-2 tabular-nums whitespace-nowrap">{value}</p>
++      <p className="font-display text-3xl font-extrabold leading-tight mt-2 tabular-nums whitespace-nowrap">{typeof value === 'number' ? <CountUp n={value} /> : value}</p>
+       {hint && <p className="text-xs text-neutral mt-1">{hint}</p>}
+     </div>
+   )
+ }
+-
+ export function Section({ title, subtitle, actions, children, className, bodyClass = 'p-5' }: { title?: ReactNode; subtitle?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClass?: string }) {
+   return (
+     <section className={cls('card overflow-hidden', className)}>
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index f0a2771..49c28e2 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -42,8 +42,33 @@
+ 
+ @keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+ @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
++@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
++@keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
++@keyframes draw-line { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
++@keyframes ring-fill { from { stroke-dashoffset: var(--ring-from, 176); } to { stroke-dashoffset: var(--ring-to, 0); } }
++@keyframes ping-soft { 0% { transform: scale(1); opacity: .7; } 100% { transform: scale(2.6); opacity: 0; } }
++@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
++@keyframes pop-in { 0% { transform: scale(.5); opacity: 0; } 70% { transform: scale(1.1); } 100% { transform: scale(1); opacity: 1; } }
++@keyframes check-draw { from { stroke-dashoffset: 30; } to { stroke-dashoffset: 0; } }
++@keyframes expand-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+ .animate-slide-in { animation: slide-in .22s ease-out; }
+ .animate-fade-in { animation: fade-in .15s ease-out; }
++/* Entradas escalonadas: cada elemento define su retraso con style={{ '--d': '120ms' }} */
++.anim-rise { animation: rise .6s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0ms); }
++.anim-grow { transform-origin: bottom; animation: grow-y .8s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0ms); }
++.anim-draw { stroke-dasharray: 1; animation: draw-line 2.2s ease-out .3s both; }
++.anim-ring { animation: ring-fill 1.4s cubic-bezier(.2,.7,.2,1) .3s both; }
++.anim-ping { animation: ping-soft 1.8s ease-out infinite; }
++.anim-bob { animation: bob 2.4s ease-in-out infinite; }
++.anim-pop { animation: pop-in .45s cubic-bezier(.2,.7,.2,1) both; }
++.anim-check { stroke-dasharray: 30; animation: check-draw .6s ease-out .25s both; }
++.anim-expand { animation: expand-in .25s ease both; }
++/* Tarjeta que se eleva al pasar el cursor */
++.lift { transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
++.lift:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(11,22,48,.14); }
+ @media (prefers-reduced-motion: reduce) {
+-  .animate-slide-in, .animate-fade-in, .animate-spin { animation: none; }
++  .animate-slide-in, .animate-fade-in, .animate-spin, .anim-rise, .anim-grow, .anim-draw, .anim-ring, .anim-ping, .anim-bob, .anim-pop, .anim-check, .anim-expand { animation: none; }
++  .anim-draw, .anim-check { stroke-dashoffset: 0; }
++  .lift { transition: none; }
++  .lift:hover { transform: none; }
+ }
+diff --git a/frontend/src/pages/Reportes.tsx b/frontend/src/pages/Reportes.tsx
+index 18b6aab..d46c23b 100644
+--- a/frontend/src/pages/Reportes.tsx
++++ b/frontend/src/pages/Reportes.tsx
+@@ -46,7 +46,7 @@ export default function Reportes() {
+ 
+       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-6">
+         <StatCard label="Personas en el reporte" value={data.length} icon={<Users className="w-5 h-5" />} hint={`${data.filter((r) => r.usuario.rol === 'ALUMNO').length} alumnos · ${data.filter((r) => r.usuario.rol === 'DOCENTE').length} docentes`} tone="sky" />
+-        <StatCard label="Horas totales" value={Math.round(horas).toLocaleString('es-MX')} icon={<Timer className="w-5 h-5" />} hint={`Promedio ${data.length ? (horas / data.length).toFixed(1) : 0} h por persona`} />
++        <StatCard label="Horas totales" value={Math.round(horas)} icon={<Timer className="w-5 h-5" />} hint={`Promedio ${data.length ? (horas / data.length).toFixed(1) : 0} h por persona`} />
+         <StatCard label="Con práctica asignada" value={conPractica} icon={<CalendarCheck className="w-5 h-5" />} hint={`${data.length - conPractica} sin empresa`} />
+         <StatCard label="Días incompletos" value={incompletos} icon={<CalendarX className="w-5 h-5" />} tone="amber" hint="Entrada sin salida = falta" />
+       </div>
+diff --git a/frontend/src/pages/admin/Dashboard.tsx b/frontend/src/pages/admin/Dashboard.tsx
+index f20ae89..60d7f73 100644
+--- a/frontend/src/pages/admin/Dashboard.tsx
++++ b/frontend/src/pages/admin/Dashboard.tsx
+@@ -1,9 +1,11 @@
++import type { CSSProperties } from 'react'
+ import { Link } from 'react-router-dom'
+-import { ArrowRight, Users, Briefcase, CalendarCheck, Timer, Building2 } from 'lucide-react'
++import { ArrowRight, Users, CalendarCheck, UserX, Building2 } from 'lucide-react'
+ import { api } from '../../api'
+ import { useAsync, useCatalogos } from '../../hooks'
+ import { useAuth } from '../../auth/AuthContext'
+-import { PageHeader, Section, Spinner, StatCard, TipoRegistroChip, Empty } from '../../components/ui'
++import { Avatar, CountUp, Section, Spinner, StatCard, TipoRegistroChip, Empty } from '../../components/ui'
++import { PuntoVivo, RutaAnimada } from '../../components/Marca'
+ import { FotoThumb } from '../../components/Evidencia'
+ import { MapaPuntos } from '../../components/Mapa'
+ import type { DiaSemana, TipoPractica } from '../../types'
+@@ -17,14 +19,14 @@ const TIPO_COLOR: Record<TipoPractica | 'NONE', string> = { SERVICIO_SOCIAL: '#0
+ 
+ export default function Dashboard() {
+   const { usuario } = useAuth()
+-  const { carrera } = useCatalogos()
++  const { carrera, empresa } = useCatalogos()
+   const lunes = (() => { const d = new Date(); const dow = (d.getDay() + 6) % 7; return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow)) })()
+   const { data, loading } = useAsync(() => Promise.all([
+-    api.usuarios(), api.registros({ desde: sumarDias(hoy(), -7) }), api.vinculaciones(), api.reporte({ desde: sumarDias(hoy(), -30) }),
++    api.usuarios(), api.registros({ desde: sumarDias(hoy(), -7) }), api.vinculaciones(), api.reporte({ desde: sumarDias(hoy(), -30) }), api.validaciones(hoy(), hoy()),
+   ]), [])
+ 
+   if (loading || !data) return <Spinner />
+-  const [usuarios, registros, vincs, resumen30] = data
++  const [usuarios, registros, vincs, resumen30, validacionesHoy] = data
+   const alumnos = usuarios.filter((u) => u.rol === 'ALUMNO' && u.activo)
+   const docentes = usuarios.filter((u) => u.rol === 'DOCENTE' && u.activo)
+   const deHoy = registros.filter((r) => ymd(new Date(r.timestamp)) === hoy())
+@@ -32,6 +34,15 @@ export default function Dashboard() {
+   const enSitio = [...presentesHoy].filter((id) => !deHoy.some((r) => r.usuarioId === id && r.tipo === 'SALIDA')).length
+   const horas30 = resumen30.reduce((s, r) => s + r.horasTotales, 0)
+   const vinculados = new Set(vincs.map((v) => v.usuarioId))
++  const keyHoy = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'][new Date().getDay()]
++  const programadosHoy = vincs.filter((v) => v.horario.some((h) => h.dia === keyHoy)).length
++  const sinEmpleador = vincs.filter((v) => !v.empleadorId && alumnos.some((a) => a.id === v.usuarioId))
++  const alumnosConEntrada = new Set(deHoy.filter((r) => r.tipo === 'ENTRADA' && r.usuario.rol === 'ALUMNO').map((r) => r.usuarioId)).size
++  const validados = validacionesHoy.length
++  const frac = alumnosConEntrada ? Math.min(1, validados / alumnosConEntrada) : 0
++  const anillo = Math.round(176 * (1 - frac))
++  const h = new Date().getHours()
++  const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches'
+ 
+   // Asistencia de la semana actual: personas con entrada / personas programadas ese día
+   const semana = DIAS_SEMANA.map((d, i) => {
+@@ -59,31 +70,53 @@ export default function Dashboard() {
+ 
+   return (
+     <>
+-      <PageHeader title="Resumen del día" eyebrow={new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+-        subtitle={`Hola, ${usuario?.nombre}. Así van las prácticas del CBT Lic. Julián Díaz Arias.`} />
++      <section className="on-dark relative overflow-hidden rounded-2xl bg-ink text-white px-6 sm:px-9 py-7 mb-6 flex flex-wrap items-center gap-6 anim-rise">
++        <div className="relative z-10 flex-1 basis-72 min-w-0">
++          <p className="text-[13px] font-medium text-[#A9B8D0] first-letter:uppercase">{new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
++          <h1 className="text-3xl font-extrabold mt-1 leading-tight">{saludo}, {usuario?.nombre}</h1>
++          <p className="text-[#C7D2E5] mt-2">
++            <b className="font-display text-lg text-aqua tabular-nums"><CountUp n={enSitio} /></b> {enSitio === 1 ? 'persona está' : 'personas están'} en su lugar de práctica ahora. CBT Lic. Julián Díaz Arias.
++          </p>
++        </div>
++        <RutaAnimada className="relative z-10 w-full max-w-[460px] shrink" />
++      </section>
+ 
+       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-6">
+-        <StatCard label="Alumnos activos" value={alumnos.length} icon={<Users className="w-5 h-5" />} hint={`${alumnos.filter((a) => vinculados.has(a.id)).length} vinculados a empresa`} />
+-        <StatCard label="Docentes activos" value={docentes.length} icon={<Briefcase className="w-5 h-5" />} tone="sky" hint="Con visitas de seguimiento" />
+-        <StatCard label="Asistencias hoy" value={presentesHoy.size} icon={<CalendarCheck className="w-5 h-5" />} hint={<span className="text-secondary font-medium">{enSitio} en su lugar de práctica ahora</span>} />
+-        <StatCard label="Horas · últimos 30 días" value={Math.round(horas30).toLocaleString('es-MX')} icon={<Timer className="w-5 h-5" />} tone="amber" hint="Suma de alumnos y docentes" />
++        <StatCard label="Alumnos activos" value={alumnos.length} icon={<Users className="w-5 h-5" />} delay={100}
++          hint={`${alumnos.filter((a) => vinculados.has(a.id)).length} vinculados a empresa · ${docentes.length} docentes`} />
++        <StatCard label={<span className="inline-flex items-center gap-2"><PuntoVivo />En práctica ahora</span>} value={enSitio} icon={<CalendarCheck className="w-5 h-5" />} delay={180}
++          hint={`de ${programadosHoy} programados hoy · ${presentesHoy.size} ya registraron entrada`} />
++        <StatCard label="Sin empleador" value={sinEmpleador.length} icon={<UserX className="w-5 h-5" />} tone="amber" delay={260}
++          hint={sinEmpleador.length ? <Link to="/empleadores" className="font-semibold text-tertiary hover:underline">Asignar ahora →</Link> : 'Todos tienen quien valide su asistencia'} />
++        <div className="card p-5 border-l-[3px] border-l-brand lift anim-rise flex items-center gap-4" style={{ '--d': '340ms' } as CSSProperties}>
++          <svg width="72" height="72" viewBox="0 0 72 72" className="shrink-0" role="img" aria-label={`${validados} de ${alumnosConEntrada} alumnos validados hoy por su empleador`}>
++            <circle cx="36" cy="36" r="28" fill="none" stroke="#EAF2F1" strokeWidth="8" />
++            <circle cx="36" cy="36" r="28" fill="none" stroke="#0F8F82" strokeWidth="8" strokeLinecap="round" strokeDasharray="176" strokeDashoffset={anillo}
++              transform="rotate(-90 36 36)" className="anim-ring" style={{ '--ring-from': 176, '--ring-to': anillo } as CSSProperties} />
++          </svg>
++          <div>
++            <p className="eyebrow">Validados por la empresa</p>
++            <p className="font-display text-3xl font-extrabold leading-tight tabular-nums"><CountUp n={validados} /><span className="text-base font-semibold text-neutral"> / {alumnosConEntrada}</span></p>
++            <p className="text-xs text-neutral">alumnos con entrada hoy</p>
++          </div>
++        </div>
+       </div>
+ 
+       <div className="grid gap-6 xl:grid-cols-3 mb-6">
+         <Section className="xl:col-span-2" title="Asistencia de la semana" subtitle="Personas que registraron entrada vs. programadas según su horario">
+           <div className="flex items-end gap-3 sm:gap-6 h-56 mt-4 px-1">
+-            {semana.map((d) => (
++            {semana.map((d, i) => (
+               <div key={d.key} className="flex-1 flex flex-col items-center justify-end h-full gap-2">
+                 <span className={cls('text-xs font-semibold tabular-nums', d.futuro ? 'text-slate-300' : 'text-secondary')}>{d.futuro ? '—' : `${d.pct}%`}</span>
+                 <div className="w-full max-w-16 flex-1 flex items-end rounded-t-lg bg-surface-low overflow-hidden" title={`${d.asistieron} de ${d.programados}`}>
+-                  <div className={cls('w-full rounded-t-lg transition-all', d.fecha === hoy() ? 'bg-primary-container' : 'bg-secondary')} style={{ height: `${d.futuro ? 0 : d.pct}%` }} />
++                  <div className={cls('w-full rounded-t-lg anim-grow', d.fecha === hoy() ? 'bg-primary-container' : 'bg-secondary')} style={{ height: `${d.futuro ? 0 : d.pct}%`, '--d': `${300 + i * 90}ms` } as CSSProperties} />
+                 </div>
+                 <span className={cls('text-xs sm:text-sm', d.fecha === hoy() ? 'font-semibold text-secondary' : 'text-neutral')}>{d.label}</span>
+               </div>
+             ))}
+           </div>
+           <div className="flex flex-wrap justify-between gap-2 border-t border-line mt-5 pt-4 text-sm text-neutral">
+-            <span>Promedio de la semana: <b className="text-on-surface">{promedio}%</b></span>
++            <span>Promedio de la semana: <b className="text-on-surface">{promedio}%</b> · Horas en 30 días: <b className="text-on-surface">{Math.round(horas30).toLocaleString('es-MX')}</b></span>
+             <span className="flex items-center gap-3">
+               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-secondary" />Días anteriores</span>
+               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-primary-container" />Hoy (en curso)</span>
+@@ -143,11 +176,30 @@ export default function Dashboard() {
+           )}
+         </Section>
+ 
+-        <Section title="¿Dónde están?" subtitle={diaMapa === hoy() ? 'Ubicación de las entradas de hoy' : diaMapa ? `Aún no hay entradas hoy · mostrando ${fmtFecha(diaMapa, { weekday: 'long', day: 'numeric' })}` : 'Sin entradas recientes'} actions={<Building2 className="w-5 h-5 text-neutral" />}>
+-          {entradasMapa.length ? (
+-            <MapaPuntos height={300} puntos={entradasMapa.map((r) => ({ lat: r.latitud, lng: r.longitud, titulo: nombreCompleto(r.usuario), detalle: `${r.empresa?.nombre ?? ''} · ${fmtHora(r.timestamp)}` }))} />
+-          ) : <Empty title="Sin entradas recientes" text="Cuando alumnos y docentes registren su entrada aparecerán aquí." />}
+-        </Section>
++        <div className="space-y-6">
++          <Section title="¿Dónde están?" subtitle={diaMapa === hoy() ? 'Ubicación de las entradas de hoy' : diaMapa ? `Aún no hay entradas hoy · mostrando ${fmtFecha(diaMapa, { weekday: 'long', day: 'numeric' })}` : 'Sin entradas recientes'} actions={<Building2 className="w-5 h-5 text-neutral" />}>
++            {entradasMapa.length ? (
++              <MapaPuntos height={300} puntos={entradasMapa.map((r) => ({ lat: r.latitud, lng: r.longitud, titulo: nombreCompleto(r.usuario), detalle: `${r.empresa?.nombre ?? ''} · ${fmtHora(r.timestamp)}` }))} />
++            ) : <Empty title="Sin entradas recientes" text="Cuando alumnos y docentes registren su entrada aparecerán aquí." />}
++          </Section>
++          <Section title="Sin empleador" subtitle="Alumnos con empresa que nadie valida todavía" bodyClass="p-3"
++            actions={<Link to="/empleadores" className="text-sm font-semibold text-secondary inline-flex items-center gap-1 hover:underline">Empleadores <ArrowRight className="w-4 h-4" /></Link>}>
++            {sinEmpleador.length === 0 ? <Empty title="Todos tienen empleador" text="Cada alumno con empresa tiene a quién validar su asistencia." /> : (
++              <ul>
++                {sinEmpleador.slice(0, 4).map((v) => {
++                  const al = alumnos.find((a) => a.id === v.usuarioId)!
++                  return (
++                    <li key={v.id} className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-surface transition-colors">
++                      <Avatar u={al} size={36} />
++                      <div className="flex-1 min-w-0"><p className="font-medium text-sm truncate">{nombreCompleto(al)}</p><p className="text-xs text-neutral truncate">{empresa(v.empresaId)?.nombre ?? '—'}</p></div>
++                      <Link to="/empleadores" className="btn-soft h-8 px-3 text-xs">Asignar</Link>
++                    </li>
++                  )
++                })}
++              </ul>
++            )}
++          </Section>
++        </div>
+       </div>
+     </>
+   )
+diff --git a/frontend/src/pages/empleador/ValidarAsistencia.tsx b/frontend/src/pages/empleador/ValidarAsistencia.tsx
+index c16b98f..71c54c8 100644
+--- a/frontend/src/pages/empleador/ValidarAsistencia.tsx
++++ b/frontend/src/pages/empleador/ValidarAsistencia.tsx
+@@ -1,24 +1,48 @@
+-import { useState } from 'react'
+-import { CheckCircle2, XCircle, Clock, UserX, MessageSquare, RefreshCw, ClipboardCheck, Building2 } from 'lucide-react'
++import { useState, type CSSProperties } from 'react'
++import { CheckCircle2, XCircle, Clock, UserX, RefreshCw, ClipboardCheck, Building2, Lock, ChevronDown } from 'lucide-react'
+ import { api } from '../../api'
+ import { useAsync } from '../../hooks'
+ import { useAuth } from '../../auth/AuthContext'
+-import { Empty, ErrorBox, PageHeader, Spinner, TipoChip, useToast } from '../../components/ui'
++import { CountUp, Empty, ErrorBox, PageHeader, Spinner, TipoChip, useToast } from '../../components/ui'
+ import type { Asignado } from '../../types'
+ import { cls, fmtFecha, fmtHora, hoy } from '../../utils'
+ 
+-const ESTADO: Record<Asignado['estado'], { label: string; chip: string; icon: typeof Clock }> = {
+-  SIN_ENTRADA: { label: 'Aún no registra su entrada', chip: 'bg-surface-container text-on-surface-variant', icon: UserX },
+-  PENDIENTE: { label: 'Por validar', chip: 'bg-tertiary-container text-tertiary', icon: Clock },
+-  PRESENTE: { label: 'Se presentó', chip: 'bg-primary-container text-secondary', icon: CheckCircle2 },
+-  AUSENTE: { label: 'No se presentó', chip: 'bg-error-container text-error', icon: XCircle },
++const CHIP: Record<Asignado['estado'], { label: string; clase: string }> = {
++  SIN_ENTRADA: { label: 'Sin entrada', clase: 'bg-surface-low text-neutral' },
++  PENDIENTE: { label: 'Por validar', clase: 'bg-surface-low text-on-surface-variant' },
++  PRESENTE: { label: 'Se presentó', clase: 'bg-primary-container text-secondary' },
++  AUSENTE: { label: 'No se presentó', clase: 'bg-tertiary-container text-tertiary' },
++}
++const AVATAR: Record<Asignado['estado'], string> = {
++  SIN_ENTRADA: 'bg-surface-low text-neutral',
++  PENDIENTE: 'bg-primary-container text-secondary',
++  PRESENTE: 'bg-secondary text-white',
++  AUSENTE: 'bg-tertiary-container text-tertiary',
++}
++const BORDE: Record<Asignado['estado'], string> = {
++  SIN_ENTRADA: 'border-line', PENDIENTE: 'border-line', PRESENTE: 'border-[#9FD9D0]', AUSENTE: 'border-[#FFB59C]',
+ }
+ 
+ /** Portal de la empresa: confirmar si cada alumno asignado se presentó. Sin foto ni ubicación. */
+ export default function ValidarAsistencia() {
+   const { usuario } = useAuth()
+   const { data = [], loading, error, reload } = useAsync(() => api.empleadorHoy(), [])
+-  const pendientes = data.filter((a) => a.estado === 'PENDIENTE').length
++  const [abierto, setAbierto] = useState<number | null | undefined>(undefined) // undefined: abre el primer pendiente
++
++  const conEntrada = data.filter((a) => a.estado !== 'SIN_ENTRADA')
++  const hechos = conEntrada.filter((a) => a.estado === 'PRESENTE' || a.estado === 'AUSENTE').length
++  const pendientes = conEntrada.length - hechos
++  const sinEntrada = data.length - conEntrada.length
++  const frac = conEntrada.length ? hechos / conEntrada.length : 0
++  const anillo = Math.round(176 * (1 - frac))
++  const primerPendiente = data.find((a) => a.estado === 'PENDIENTE')?.usuarioId ?? null
++  const actual = abierto === undefined ? primerPendiente : abierto
++
++  /** Tras validar, abre automáticamente al siguiente alumno por validar. */
++  const despuesDeValidar = (id: number) => {
++    setAbierto(data.find((a) => a.estado === 'PENDIENTE' && a.usuarioId !== id)?.usuarioId ?? null)
++    reload()
++  }
+ 
+   return (
+     <>
+@@ -32,27 +56,46 @@ export default function ValidarAsistencia() {
+           text="Cuando el vinculador te asigne alumnos con práctica vigente, aparecerán aquí." /></div>
+       ) : (
+         <>
+-          <p className="text-sm text-neutral mb-4" aria-live="polite">
+-            {pendientes > 0 ? <><b className="text-tertiary">{pendientes}</b> {pendientes === 1 ? 'alumno por validar' : 'alumnos por validar'}</> : 'No tienes validaciones pendientes por ahora.'}
+-          </p>
+-          <div className="grid gap-4 lg:grid-cols-2">
+-            {data.map((a) => <TarjetaAlumno key={a.usuarioId} a={a} onSaved={reload} />)}
++          <section className="on-dark anim-rise rounded-2xl bg-ink text-white px-5 sm:px-7 py-5 mb-5 flex flex-wrap items-center gap-x-6 gap-y-4" aria-live="polite">
++            <svg width="84" height="84" viewBox="0 0 72 72" className="shrink-0" role="img" aria-label={`${hechos} de ${conEntrada.length} alumnos validados`}>
++              <circle cx="36" cy="36" r="28" fill="none" stroke="rgba(255,255,255,.14)" strokeWidth="8" />
++              <circle cx="36" cy="36" r="28" fill="none" stroke="#2EE6C5" strokeWidth="8" strokeLinecap="round" strokeDasharray="176" strokeDashoffset={anillo}
++                transform="rotate(-90 36 36)" style={{ transition: 'stroke-dashoffset .7s cubic-bezier(.2,.7,.2,1)' }} />
++            </svg>
++            <div className="flex-1 basis-56 min-w-0">
++              <p className="font-display text-2xl sm:text-[26px] font-extrabold leading-tight"><CountUp n={hechos} ms={800} /> de {conEntrada.length} validados</p>
++              <p className="text-sm text-[#C7D2E5] mt-1">
++                {pendientes > 0 ? `Te ${pendientes === 1 ? 'falta 1 alumno' : `faltan ${pendientes} alumnos`} por confirmar. Puedes corregir tu respuesta durante el día.` : 'No tienes validaciones pendientes por ahora.'}
++              </p>
++            </div>
++            <div className="flex gap-3">
++              <div className="rounded-xl bg-white/10 px-4 py-2"><p className="text-xs text-[#A9B8D0]">Pendientes</p><p className="font-display text-xl font-extrabold tabular-nums">{pendientes}</p></div>
++              <div className="rounded-xl bg-white/10 px-4 py-2"><p className="text-xs text-[#A9B8D0]">Sin entrada</p><p className="font-display text-xl font-extrabold tabular-nums">{sinEntrada}</p></div>
++            </div>
++          </section>
++
++          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3 items-start">
++            {data.map((a, i) => (
++              <TarjetaAlumno key={a.usuarioId} a={a} indice={i} abierto={actual === a.usuarioId}
++                onAlternar={() => setAbierto(actual === a.usuarioId ? null : a.usuarioId)} onSaved={() => despuesDeValidar(a.usuarioId)} />
++            ))}
+           </div>
++
++          <p className="flex items-center gap-2 text-xs text-neutral mt-6"><Lock className="w-4 h-4 shrink-0" aria-hidden="true" />Rutario no te pide ubicación ni fotos. Solo confirmas si el alumno se presentó.</p>
+         </>
+       )}
+     </>
+   )
+ }
+ 
+-function TarjetaAlumno({ a, onSaved }: { a: Asignado; onSaved: () => void }) {
++function TarjetaAlumno({ a, indice, abierto, onAlternar, onSaved }: { a: Asignado; indice: number; abierto: boolean; onAlternar: () => void; onSaved: () => void }) {
+   const toast = useToast()
+   const [coment, setComent] = useState(a.comentario ?? '')
+-  const [verComent, setVerComent] = useState(!!a.comentario)
+-  const [cambiando, setCambiando] = useState(false)
+   const [guardando, setGuardando] = useState(false)
+   const [error, setError] = useState<string>()
+-  const E = ESTADO[a.estado]
+-  const puedeValidar = a.registroId !== undefined && (a.estado === 'PENDIENTE' || cambiando)
++  const bloqueado = a.estado === 'SIN_ENTRADA' || a.registroId === undefined
++  const ini = a.nombre.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase()
++  const sub = bloqueado ? 'Aún no registra su entrada' : `Entró a las ${fmtHora(a.entrada!)}${a.salida ? ` · salió a las ${fmtHora(a.salida)}` : ''}`
+ 
+   const enviar = async (presente: boolean) => {
+     setError(undefined)
+@@ -60,7 +103,6 @@ function TarjetaAlumno({ a, onSaved }: { a: Asignado; onSaved: () => void }) {
+     try {
+       await api.validarAsistencia(a.registroId!, presente, coment.trim() || undefined)
+       toast(presente ? `${a.nombre}: se presentó` : `${a.nombre}: no se presentó`)
+-      setCambiando(false)
+       onSaved()
+     } catch (e) {
+       setError((e as Error).message)
+@@ -70,54 +112,38 @@ function TarjetaAlumno({ a, onSaved }: { a: Asignado; onSaved: () => void }) {
+   }
+ 
+   return (
+-    <article className={cls('card p-5 flex flex-col gap-4 border-l-[3px]',
+-      a.estado === 'PENDIENTE' ? 'border-l-coral' : a.estado === 'PRESENTE' ? 'border-l-brand' : a.estado === 'AUSENTE' ? 'border-l-error' : 'border-l-line')}>
+-      <header className="flex items-start justify-between gap-3">
+-        <div className="min-w-0">
+-          <h2 className="text-lg font-bold leading-snug">{a.nombre}</h2>
+-          <p className="text-sm text-neutral">{[a.carrera, a.grado ? `${a.grado}° ${a.grupo ?? ''}`.trim() : undefined].filter(Boolean).join(' · ')}</p>
+-        </div>
+-        <span className={cls('chip shrink-0', E.chip)}><E.icon className="w-3.5 h-3.5" />{a.estado === 'SIN_ENTRADA' ? 'Sin entrada' : E.label}</span>
+-      </header>
++    <article className={cls('card overflow-hidden lift anim-rise', BORDE[a.estado])} style={{ '--d': `${100 + indice * 70}ms` } as CSSProperties}>
++      <button type="button" onClick={onAlternar} disabled={bloqueado} aria-expanded={abierto}
++        className="w-full min-h-[72px] px-4 py-3 flex items-center gap-3 text-left disabled:cursor-not-allowed">
++        <span className={cls('w-11 h-11 rounded-full flex items-center justify-center font-display font-bold text-sm shrink-0', AVATAR[a.estado])} aria-hidden="true">{ini}</span>
++        <span className="flex-1 min-w-0">
++          <span className="block font-semibold leading-snug">{a.nombre}</span>
++          <span className="block text-xs text-neutral">{sub}</span>
++        </span>
++        <span key={a.estado} className={cls('chip shrink-0 anim-pop', CHIP[a.estado].clase)}>
++          {a.estado === 'PRESENTE' && <CheckCircle2 className="w-3.5 h-3.5" />}{a.estado === 'AUSENTE' && <XCircle className="w-3.5 h-3.5" />}
++          {a.estado === 'SIN_ENTRADA' && <UserX className="w-3.5 h-3.5" />}{CHIP[a.estado].label}
++        </span>
++        {!bloqueado && <ChevronDown className={cls('w-4 h-4 text-neutral shrink-0 transition-transform', abierto && 'rotate-180')} aria-hidden="true" />}
++      </button>
+ 
+-      <div className="text-sm space-y-1.5">
+-        <p className="flex items-center gap-2"><TipoChip tipo={a.tipoPractica} /></p>
+-        <p className="flex items-start gap-2 text-on-surface-variant"><Building2 className="w-4 h-4 mt-0.5 shrink-0 text-neutral" />{a.actividades}</p>
+-        <p className="flex items-center gap-2 text-on-surface-variant"><Clock className="w-4 h-4 shrink-0 text-neutral" />
+-          {a.horarioInicio ? `Horario de hoy: ${a.horarioInicio}–${a.horarioFin}` : 'Sin horario programado hoy'}
+-          {a.entrada && <span className="text-neutral">· Entró a las <b className="text-on-surface tabular-nums">{fmtHora(a.entrada)}</b></span>}
+-          {a.salida && <span className="text-neutral">· Salió a las <b className="text-on-surface tabular-nums">{fmtHora(a.salida)}</b></span>}
+-        </p>
+-      </div>
+-
+-      {a.estado === 'SIN_ENTRADA' && (
+-        <p className="text-sm bg-surface-low rounded-lg p-3 text-on-surface-variant">Podrás validarlo en cuanto registre su entrada en Rutario.</p>
+-      )}
+-
+-      {(a.estado === 'PRESENTE' || a.estado === 'AUSENTE') && !cambiando && (
+-        <div className="rounded-lg bg-surface-low p-3 text-sm space-y-2">
+-          <p>Validado{a.validadoEn ? <> a las <b className="tabular-nums">{fmtHora(a.validadoEn)}</b></> : null}.</p>
+-          {a.comentario && <p className="flex gap-2 text-on-surface-variant"><MessageSquare className="w-4 h-4 mt-0.5 shrink-0 text-neutral" />{a.comentario}</p>}
+-          <button className="btn-ghost h-8 px-2 text-xs" onClick={() => { setCambiando(true); setVerComent(!!a.comentario) }}>Corregir validación</button>
+-        </div>
+-      )}
+-
+-      {puedeValidar && (
+-        <div className="space-y-3">
+-          {verComent ? (
+-            <label className="block">
+-              <span className="label">Comentario (opcional)</span>
+-              <textarea className="input" rows={2} maxLength={500} value={coment} onChange={(e) => setComent(e.target.value)} placeholder="Ej. Llegó 20 minutos tarde / Se retiró temprano con permiso" />
+-            </label>
+-          ) : (
+-            <button type="button" className="btn-ghost h-8 px-2 text-xs" onClick={() => setVerComent(true)}><MessageSquare className="w-3.5 h-3.5" />Agregar comentario</button>
+-          )}
++      {abierto && !bloqueado && (
++        <div className="anim-expand px-4 pb-4 space-y-3">
++          <div className="text-sm space-y-1.5 text-on-surface-variant">
++            <p className="flex items-center gap-2"><TipoChip tipo={a.tipoPractica} /></p>
++            <p className="flex items-start gap-2"><Building2 className="w-4 h-4 mt-0.5 shrink-0 text-neutral" />{a.actividades}</p>
++            <p className="flex items-center gap-2"><Clock className="w-4 h-4 shrink-0 text-neutral" />{a.horarioInicio ? `Horario de hoy: ${a.horarioInicio}–${a.horarioFin}` : 'Sin horario programado hoy'}</p>
++          </div>
++          <label className="block">
++            <span className="label">Comentario (opcional)</span>
++            <textarea className="input" rows={2} maxLength={500} value={coment} onChange={(e) => setComent(e.target.value)} placeholder="Ej. Llegó 20 minutos tarde / Se retiró temprano con permiso" />
++          </label>
+           <ErrorBox msg={error} />
+-          <div className="grid grid-cols-2 gap-3">
+-            <button className="btn-primary h-12 text-base" disabled={guardando} onClick={() => enviar(true)}><CheckCircle2 className="w-5 h-5" />Se presentó</button>
+-            <button className="btn-outline h-12 text-base border-error/50 text-error hover:!border-error hover:!text-error hover:bg-error-container/40" disabled={guardando} onClick={() => enviar(false)}><XCircle className="w-5 h-5" />No se presentó</button>
++          <div className="flex flex-wrap gap-3">
++            <button className="btn-primary h-12 text-base flex-1 basis-40" disabled={guardando} onClick={() => enviar(true)}><CheckCircle2 className="w-5 h-5 shrink-0" />Se presentó</button>
++            <button className="btn-outline h-12 text-base flex-1 basis-40 !border-[#B83A14] !text-tertiary hover:!bg-tertiary-container/50" disabled={guardando} onClick={() => enviar(false)}><XCircle className="w-5 h-5 shrink-0" />No se presentó</button>
+           </div>
+-          {cambiando && <button className="btn-ghost h-8 px-2 text-xs" onClick={() => { setCambiando(false); setError(undefined) }}>Cancelar corrección</button>}
++          {(a.estado === 'PRESENTE' || a.estado === 'AUSENTE') && a.validadoEn && <p className="text-xs text-neutral">Validado a las <b className="tabular-nums">{fmtHora(a.validadoEn)}</b>. Puedes corregirlo hoy.</p>}
+         </div>
+       )}
+     </article>
+diff --git a/frontend/src/pages/orientador/InicioOrientador.tsx b/frontend/src/pages/orientador/InicioOrientador.tsx
+index 94b7c7a..d70f3e8 100644
+--- a/frontend/src/pages/orientador/InicioOrientador.tsx
++++ b/frontend/src/pages/orientador/InicioOrientador.tsx
+@@ -34,7 +34,7 @@ export default function InicioOrientador() {
+         <StatCard label="Alumnos en mis grupos" value={alumnos.length} icon={<Users className="w-5 h-5" />} hint={`${alumnos.filter((a) => a.vinculacion).length} con práctica asignada`} />
+         <StatCard label="Docentes relacionados" value={docentes.length} icon={<Briefcase className="w-5 h-5" />} tone="sky" hint="Supervisan a tus alumnos" />
+         <StatCard label="Asistencias hoy" value={presentes} icon={<CalendarCheck className="w-5 h-5" />} tone="slate" />
+-        <StatCard label="Horas · 30 días" value={Math.round(horas).toLocaleString('es-MX')} icon={<Timer className="w-5 h-5" />} tone="amber" />
++        <StatCard label="Horas · 30 días" value={Math.round(horas)} icon={<Timer className="w-5 h-5" />} tone="amber" />
+       </div>
+ 
+       <div className="grid gap-6 xl:grid-cols-[1fr_380px] items-start">
+diff --git a/frontend/src/pages/vinculador/Empleadores.tsx b/frontend/src/pages/vinculador/Empleadores.tsx
+index 1f25d90..088e9c8 100644
+--- a/frontend/src/pages/vinculador/Empleadores.tsx
++++ b/frontend/src/pages/vinculador/Empleadores.tsx
+@@ -1,10 +1,11 @@
+ import { useMemo, useState } from 'react'
+-import { Plus, Search, Pencil, KeyRound, UserCog } from 'lucide-react'
++import { Plus, Search, Pencil, KeyRound, UserCog, Link2, AlertTriangle } from 'lucide-react'
+ import { api } from '../../api'
+ import { useAsync, useCatalogos } from '../../hooks'
+ import { Avatar, Empty, PageHeader, Pager, Spinner, Toggle, usePaged, useToast } from '../../components/ui'
+ import { RestablecerPassword } from '../../components/RestablecerPassword'
+ import UsuarioDrawer from '../../components/UsuarioDrawer'
++import AsignarAlumnosDrawer from '../../components/AsignarAlumnosDrawer'
+ import type { Usuario } from '../../types'
+ import { nombreCompleto } from '../../utils'
+ 
+@@ -12,12 +13,19 @@ import { nombreCompleto } from '../../utils'
+ export default function Empleadores() {
+   const toast = useToast()
+   const { empresa } = useCatalogos()
+-  const { data, loading, reload, setData } = useAsync(() => Promise.all([api.usuarios({ rol: 'EMPLEADOR' }), api.vinculaciones()]), [])
++  const { data, loading, reload, setData } = useAsync(() => Promise.all([api.usuarios({ rol: 'EMPLEADOR' }), api.vinculaciones(), api.usuarios({ rol: 'ALUMNO' })]), [])
+   const [q, setQ] = useState('')
+   const [drawer, setDrawer] = useState<{ open: boolean; u?: Usuario | null }>({ open: false })
+   const [clave, setClave] = useState<Usuario | null>(null)
++  const [asignar, setAsignar] = useState<Usuario | null>(null)
+ 
+   const asignados = (id: number) => data?.[1].filter((v) => v.empleadorId === id).length ?? 0
++  // Alumnos con empresa cuyo empleador aún no se asigna, pero su empresa ya tiene uno activo
++  const pendientes = useMemo(() => {
++    if (!data) return 0
++    const conEmpleador = new Set(data[0].filter((e) => e.activo).map((e) => e.empresaId))
++    return data[1].filter((v) => !v.empleadorId && conEmpleador.has(v.empresaId) && data[2].some((a) => a.id === v.usuarioId && a.activo)).length
++  }, [data])
+   const filas = useMemo(() => (data?.[0] ?? []).filter((u) =>
+     !q || (nombreCompleto(u) + (u.email ?? '') + (empresa(u.empresaId)?.nombre ?? '')).toLowerCase().includes(q.toLowerCase())),
+     [data, q, empresa])
+@@ -25,16 +33,23 @@ export default function Empleadores() {
+ 
+   const toggle = async (u: Usuario, activo: boolean) => {
+     await api.setActivo(u.id, activo)
+-    setData(data && [data[0].map((x) => (x.id === u.id ? { ...x, activo } : x)), data[1]])
++    setData(data && [data[0].map((x) => (x.id === u.id ? { ...x, activo } : x)), data[1], data[2]])
+     toast(activo ? 'Empleador activado' : 'Empleador desactivado: ya no podrá iniciar sesión')
+   }
+ 
+   return (
+     <>
+       <PageHeader title="Empleadores" eyebrow="Módulo de vinculación"
+-        subtitle="Personas de las empresas que confirman si el alumno se presentó. Después de crearlas, asígnalas al alumno desde «Mis alumnos» → Vinculación."
++        subtitle={<>Personas de las empresas que confirman si el alumno se presentó. Crea su cuenta y luego pulsa <b>Asignar alumnos</b> en su fila.</>}
+         actions={<button className="btn-primary" onClick={() => setDrawer({ open: true, u: null })}><Plus className="w-4 h-4" />Nuevo empleador</button>} />
+ 
++      {pendientes > 0 && (
++        <div className="anim-rise flex items-center gap-3 rounded-xl bg-tertiary-container text-[#7A2509] px-4 py-3 mb-4 text-sm" role="status">
++          <AlertTriangle className="w-5 h-5 shrink-0" aria-hidden="true" />
++          <span><b>{pendientes} {pendientes === 1 ? 'alumno' : 'alumnos'}</b> ya {pendientes === 1 ? 'tiene' : 'tienen'} empresa con empleador disponible, pero nadie valida su asistencia todavía.</span>
++        </div>
++      )}
++
+       <div className="card p-4 mb-4">
+         <label className="relative block">
+           <Search className="w-4 h-4 absolute left-3 top-3 text-neutral" />
+@@ -48,7 +63,7 @@ export default function Empleadores() {
+         ) : (
+           <>
+             <div className="overflow-x-auto">
+-              <table className="w-full min-w-[760px]">
++              <table className="w-full min-w-[900px]">
+                 <thead><tr className="bg-surface-low"><th className="th">Empleador</th><th className="th">Correo</th><th className="th">Empresa</th><th className="th text-right">Alumnos asignados</th><th className="th">Activo</th><th className="th text-right">Acciones</th></tr></thead>
+                 <tbody>
+                   {pg.slice.map((u) => (
+@@ -56,9 +71,10 @@ export default function Empleadores() {
+                       <td className="td"><div className="flex items-center gap-3"><Avatar u={u} /><span className="font-medium">{nombreCompleto(u)}</span></div></td>
+                       <td className="td text-neutral">{u.email}</td>
+                       <td className="td">{empresa(u.empresaId)?.nombre ?? <span className="text-neutral">—</span>}</td>
+-                      <td className="td text-right tabular-nums font-semibold">{asignados(u.id)}</td>
++                      <td className="td text-right">{asignados(u.id) === 0 ? <span className="chip bg-tertiary-container text-tertiary">Sin alumnos</span> : <b className="tabular-nums">{asignados(u.id)}</b>}</td>
+                       <td className="td"><Toggle checked={u.activo} onChange={(v) => toggle(u, v)} label={`Activo: ${nombreCompleto(u)}`} /></td>
+                       <td className="td text-right whitespace-nowrap">
++                        {u.activo && <button className="btn-primary h-8 px-3 text-xs mr-1" onClick={() => setAsignar(u)}><Link2 className="w-3.5 h-3.5" />Asignar alumnos</button>}
+                         <button className="icon-btn" title="Editar" aria-label={`Editar a ${nombreCompleto(u)}`} onClick={() => setDrawer({ open: true, u })}><Pencil className="w-4 h-4" /></button>
+                         <button className="icon-btn" title="Restablecer contraseña" aria-label={`Restablecer contraseña de ${nombreCompleto(u)}`} onClick={() => setClave(u)}><KeyRound className="w-4 h-4" /></button>
+                       </td>
+@@ -72,6 +88,8 @@ export default function Empleadores() {
+         )}
+       </div>
+ 
++      <AsignarAlumnosDrawer empleador={asignar} empresaNombre={empresa(asignar?.empresaId)?.nombre} alumnos={data?.[2] ?? []} vinculaciones={data?.[1] ?? []} empleadores={data?.[0] ?? []}
++        onClose={() => setAsignar(null)} onSaved={reload} />
+       <RestablecerPassword usuario={clave} onCerrar={() => setClave(null)} />
+       <UsuarioDrawer open={drawer.open} usuario={drawer.u} roles={['EMPLEADOR']} onClose={() => setDrawer({ open: false })} onSaved={reload} />
+     </>
+diff --git a/frontend/src/pages/vinculador/MisPersonas.tsx b/frontend/src/pages/vinculador/MisPersonas.tsx
+index b3a48f1..8760ef9 100644
+--- a/frontend/src/pages/vinculador/MisPersonas.tsx
++++ b/frontend/src/pages/vinculador/MisPersonas.tsx
+@@ -1,6 +1,6 @@
+ import { useMemo, useState } from 'react'
+ import { Link } from 'react-router-dom'
+-import { Search, UserPlus, Eye, Link2, Users, Building2, AlertTriangle, Timer, FileSpreadsheet, KeyRound } from 'lucide-react'
++import { Search, UserPlus, Eye, Link2, Users, Building2, AlertTriangle, Timer, FileSpreadsheet, KeyRound, UserCheck } from 'lucide-react'
+ import { RestablecerPassword } from '../../components/RestablecerPassword'
+ import { api, extension } from '../../api'
+ import { useAsync, useCatalogos } from '../../hooks'
+@@ -15,6 +15,7 @@ export default function MisPersonas({ rol }: { rol: 'ALUMNO' | 'DOCENTE' }) {
+   const { empresas, carrera } = useCatalogos()
+   const desde = sumarDias(hoy(), -120)
+   const { data = [], loading, reload } = useAsync(() => api.reporte({ rol, desde }), [rol])
++  const { data: empleadores = [] } = useAsync(() => (rol === 'ALUMNO' ? api.usuarios({ rol: 'EMPLEADOR' }) : Promise.resolve([] as Usuario[])), [rol])
+   const [q, setQ] = useState('')
+   const [tipo, setTipo] = useState<TipoPractica | '' | 'SIN'>('')
+   const [nuevo, setNuevo] = useState(false)
+@@ -68,9 +69,9 @@ export default function MisPersonas({ rol }: { rol: 'ALUMNO' | 'DOCENTE' }) {
+         {loading ? <Spinner /> : filas.length === 0 ? <Empty icon={<Users className="w-6 h-6" />} title="Sin resultados" /> : (
+           <>
+             <div className="overflow-x-auto">
+-              <table className="w-full min-w-[900px]">
++              <table className="w-full min-w-[1040px]">
+                 <thead><tr className="bg-surface-low">
+-                  {esAlumno && <th className="th">Matrícula</th>}<th className="th">{esAlumno ? 'Alumno' : 'Docente'}</th><th className="th">Carrera</th><th className="th">Tipo</th><th className="th">Empresa receptora</th><th className="th text-right">Horas</th><th className="th text-right">Acciones</th>
++                  {esAlumno && <th className="th">Matrícula</th>}<th className="th">{esAlumno ? 'Alumno' : 'Docente'}</th><th className="th">Carrera</th><th className="th">Tipo</th><th className="th">Empresa receptora</th>{esAlumno && <th className="th">Empleador</th>}<th className="th text-right">Horas</th><th className="th text-right">Acciones</th>
+                 </tr></thead>
+                 <tbody>
+                   {pg.slice.map((r) => (
+@@ -80,6 +81,14 @@ export default function MisPersonas({ rol }: { rol: 'ALUMNO' | 'DOCENTE' }) {
+                       <td className="td text-neutral">{carrera(r.usuario.carreraId)?.nombre.replace(/Técnico (en|como) /, '') ?? '—'}</td>
+                       <td className="td"><TipoChip tipo={r.vinculacion?.tipoPractica} /></td>
+                       <td className="td">{r.empresa ? <span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-neutral shrink-0" />{r.empresa.nombre}</span> : <span className="text-error text-sm font-medium">Sin asignar</span>}</td>
++                      {esAlumno && (
++                        <td className="td">
++                          {!r.vinculacion ? <span className="text-neutral">—</span>
++                            : r.vinculacion.empleadorId
++                              ? <span className="chip bg-primary-container text-secondary"><UserCheck className="w-3.5 h-3.5" />{nombreCompleto(empleadores.find((e) => e.id === r.vinculacion?.empleadorId) ?? { nombre: 'Asignado', apellidoPaterno: '' })}</span>
++                              : <button className="chip bg-tertiary-container text-tertiary hover:brightness-95 cursor-pointer" onClick={() => setVincular(r.usuario)} title="Elige al empleador en la sección Empresa">+ Asignar empleador</button>}
++                        </td>
++                      )}
+                       <td className="td text-right whitespace-nowrap"><b className="tabular-nums">{fmtHorasCorto(r.horasTotales)}</b><p className="text-xs text-neutral">{r.diasAsistidos} días</p></td>
+                       <td className="td text-right whitespace-nowrap">
+                         {r.vinculacion ? <>
